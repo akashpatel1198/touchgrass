@@ -1,0 +1,12 @@
+# Env files
+.env
+.env.*
+*.env
+
+# Old planning docs (kept locally, not tracked)
+HANDOFF.md
+OUTLINE_OLD.md
+
+# Claude Code local files
+CLAUDE.md
+.claude/
