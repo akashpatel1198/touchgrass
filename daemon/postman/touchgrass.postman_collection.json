@@ -1,0 +1,157 @@
+{
+  "info": {
+    "_postman_id": "touchgrass-daemon-v1",
+    "name": "touchgrass daemon",
+    "description": "REST + WebSocket surface for the touchgrass daemon.\n\n## Setup\n1. Set the `base_url` collection variable (default `http://localhost:8765`). For phase 2+ use your laptop's tailnet IP, e.g. `http://100.64.0.1:8765`.\n2. Set the `bearer_token` collection variable to the same string in `~/.touchgrass/config.yaml`.\n3. Pick any project name you've configured for the `:project_name` URL variable (or set the `project_name` collection variable below).\n\n## WebSocket\nThe stream endpoint is WebSocket-only and isn't included as an exportable item — Postman's WS request format is awkward to ship. Create one manually:\n\n  • New → WebSocket Request\n  • URL: `ws://localhost:8765/sessions/{{session_id}}/stream`\n  • Headers: `Authorization: Bearer {{bearer_token}}`\n  • Send JSON frame `{\"type\":\"prompt\",\"text\":\"hello\"}` to push a user turn over the same socket.\n",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      { "key": "token", "value": "{{bearer_token}}", "type": "string" }
+    ]
+  },
+  "variable": [
+    { "key": "base_url", "value": "http://localhost:8765" },
+    { "key": "bearer_token", "value": "REPLACE_WITH_BEARER_FROM_CONFIG_YAML" },
+    { "key": "project_name", "value": "my-app" },
+    { "key": "session_id", "value": "" }
+  ],
+  "item": [
+    {
+      "name": "Health (unauth)",
+      "request": {
+        "auth": { "type": "noauth" },
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/health",
+          "host": ["{{base_url}}"],
+          "path": ["health"]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Projects",
+      "item": [
+        {
+          "name": "List projects",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/projects",
+              "host": ["{{base_url}}"],
+              "path": ["projects"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "List sessions for project",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/projects/{{project_name}}/sessions",
+              "host": ["{{base_url}}"],
+              "path": ["projects", "{{project_name}}", "sessions"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Create session",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "  const sid = pm.response.json().session_id;",
+                  "  pm.collectionVariables.set('session_id', sid);",
+                  "  console.log('saved session_id =', sid);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"goal\": \"Investigate the auth redirect bug\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/projects/{{project_name}}/sessions",
+              "host": ["{{base_url}}"],
+              "path": ["projects", "{{project_name}}", "sessions"]
+            },
+            "description": "On 201, the test script auto-saves `session_id` into the collection variable so the requests below pick it up."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Sessions",
+      "item": [
+        {
+          "name": "Get session detail",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/sessions/{{session_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["sessions", "{{session_id}}"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get session messages",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/sessions/{{session_id}}/messages?limit=50",
+              "host": ["{{base_url}}"],
+              "path": ["sessions", "{{session_id}}", "messages"],
+              "query": [
+                { "key": "limit", "value": "50" },
+                { "key": "before_id", "value": "", "disabled": true }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Submit prompt",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"text\": \"What files are in the project root?\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/sessions/{{session_id}}/prompts",
+              "host": ["{{base_url}}"],
+              "path": ["sessions", "{{session_id}}", "prompts"]
+            },
+            "description": "Returns 202 immediately; the assistant turn is processed async. Watch the WebSocket (or poll GET /sessions/:id/messages) for the response."
+          },
+          "response": []
+        }
+      ]
+    }
+  ]
+}
