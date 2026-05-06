@@ -15,7 +15,8 @@
     { "key": "base_url", "value": "http://localhost:8765" },
     { "key": "bearer_token", "value": "REPLACE_WITH_BEARER_FROM_CONFIG_YAML" },
     { "key": "project_name", "value": "my-app" },
-    { "key": "session_id", "value": "" }
+    { "key": "session_id", "value": "" },
+    { "key": "request_id", "value": "" }
   ],
   "item": [
     {
@@ -148,6 +149,99 @@
               "path": ["sessions", "{{session_id}}", "prompts"]
             },
             "description": "Returns 202 immediately; the assistant turn is processed async. Watch the WebSocket (or poll GET /sessions/:id/messages) for the response."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Permissions",
+      "item": [
+        {
+          "name": "List pending requests",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const rows = pm.response.json();",
+                  "if (Array.isArray(rows) && rows.length > 0) {",
+                  "  pm.collectionVariables.set('request_id', rows[0].id);",
+                  "  console.log('saved request_id =', rows[0].id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/permissions/pending",
+              "host": ["{{base_url}}"],
+              "path": ["permissions", "pending"]
+            },
+            "description": "Returns every pending permission request across all sessions. The test script auto-saves the first row's id into the `request_id` collection variable so the decision request below picks it up."
+          },
+          "response": []
+        },
+        {
+          "name": "Allow once",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"decision\": \"allow_once\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/permissions/{{request_id}}/decision",
+              "host": ["{{base_url}}"],
+              "path": ["permissions", "{{request_id}}", "decision"]
+            },
+            "description": "204 on success. 404 if no pending request matches; 409 if already resolved."
+          },
+          "response": []
+        },
+        {
+          "name": "Allow for project",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"decision\": \"allow_project\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/permissions/{{request_id}}/decision",
+              "host": ["{{base_url}}"],
+              "path": ["permissions", "{{request_id}}", "decision"]
+            },
+            "description": "Mutates the in-memory per-project allow list for the rest of the daemon's lifetime. Persisting across restarts is a 'Later' item."
+          },
+          "response": []
+        },
+        {
+          "name": "Deny",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"decision\": \"deny\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/permissions/{{request_id}}/decision",
+              "host": ["{{base_url}}"],
+              "path": ["permissions", "{{request_id}}", "decision"]
+            }
           },
           "response": []
         }

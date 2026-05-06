@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 
 from ..config import Config, ProjectConfig
 from ..events import Event
+from ..permissions import PermissionBroker
 from ..runner import SDKClientFactory, SessionRunner, _default_client_factory
 from ..store import SessionStore
 from .hub import SessionHub
@@ -20,8 +21,12 @@ class AppState:
     config: Config
     store: SessionStore
     client_factory: SDKClientFactory = field(default=_default_client_factory)
+    broker: PermissionBroker = field(init=False)
     hubs: dict[str, SessionHub] = field(default_factory=dict)
     _hubs_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+
+    def __post_init__(self) -> None:
+        self.broker = PermissionBroker(self.config, self.store)
 
     def project(self, name: str) -> ProjectConfig | None:
         return next((p for p in self.config.projects if p.name == name), None)
@@ -38,6 +43,7 @@ class AppState:
             session_id=session.id,
             store=self.store,
             event_queue=queue,
+            broker=self.broker,
             client_factory=self.client_factory,
         )
         hub = SessionHub(runner, queue)

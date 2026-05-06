@@ -36,6 +36,7 @@ from claude_agent_sdk import (
 
 from .config import ProjectConfig
 from .events import Event
+from .permissions import PermissionBroker
 from .store import SessionStore
 
 log = logging.getLogger(__name__)
@@ -81,12 +82,14 @@ class SessionRunner:
         session_id: str,
         store: SessionStore,
         event_queue: asyncio.Queue[Event],
+        broker: PermissionBroker | None = None,
         client_factory: SDKClientFactory = _default_client_factory,
     ) -> None:
         self._project = project
         self._session_id = session_id
         self._store = store
         self._events = event_queue
+        self._broker = broker
         self._client_factory = client_factory
         self._prompt_queue: asyncio.Queue[_Prompt] = asyncio.Queue()
         self._client: SDKClientLike | None = None
@@ -238,11 +241,19 @@ class SessionRunner:
         tool_input: dict[str, Any],
         context: ToolPermissionContext,
     ) -> PermissionResultAllow | PermissionResultDeny:
-        # Phase 1: blanket-allow. The real broker (allow once / for project / deny + ntfy)
-        # lands in phase 2. The signature is in place now so the wiring doesn't change.
-        del tool_input, context  # unused in phase 1
-        log.debug("phase-1 auto-allow for tool %s on session %s", tool_name, self._session_id)
-        return PermissionResultAllow()
+        del context  # unused
+        if self._broker is None:
+            # No broker wired (test fixtures, or future ad-hoc tools). Allow-all is
+            # the safe default *only* in tests; production constructs a broker.
+            log.debug("no broker wired — auto-allow %s", tool_name)
+            return PermissionResultAllow()
+        return await self._broker.request(
+            session_id=self._session_id,
+            project_name=self._project.name,
+            tool_name=tool_name,
+            tool_input=tool_input,
+            event_queue=self._events,
+        )
 
     async def _emit_event(self, event: Event) -> None:
         await self._events.put(event)

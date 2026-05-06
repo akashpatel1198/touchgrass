@@ -238,3 +238,44 @@ def test_websocket_unknown_session_closes(client: TestClient) -> None:
         ) as ws,
     ):
         ws.receive_json()
+
+
+def test_pending_permissions_lists_db_rows(client: TestClient) -> None:
+    state = client.app.state.touchgrass  # type: ignore[attr-defined]
+    session = state.store.create_session("myproj")
+    state.store.create_permission_request(session.id, "Bash", '{"cmd":"ls"}')
+
+    response = client.get("/permissions/pending", headers=HEADERS)
+    assert response.status_code == 200
+    rows = response.json()
+    assert len(rows) == 1
+    assert rows[0]["tool_name"] == "Bash"
+    assert rows[0]["status"] == "pending"
+
+
+def test_decision_unknown_id_returns_404(client: TestClient) -> None:
+    response = client.post(
+        "/permissions/nonexistent/decision",
+        json={"decision": "allow_once"},
+        headers=HEADERS,
+    )
+    assert response.status_code == 404
+
+
+def test_decision_invalid_kind_returns_422(client: TestClient) -> None:
+    response = client.post(
+        "/permissions/anything/decision",
+        json={"decision": "made_up_value"},
+        headers=HEADERS,
+    )
+    assert response.status_code == 422
+
+
+def test_permissions_endpoints_require_bearer(client: TestClient) -> None:
+    assert client.get("/permissions/pending").status_code == 401
+    assert (
+        client.post(
+            "/permissions/whatever/decision", json={"decision": "deny"}
+        ).status_code
+        == 401
+    )

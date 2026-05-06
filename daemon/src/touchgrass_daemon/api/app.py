@@ -15,7 +15,7 @@ from fastapi import FastAPI
 from ..config import Config
 from ..runner import SDKClientFactory, _default_client_factory
 from ..store import SessionStore
-from .routes import health, projects, sessions, streams
+from .routes import health, permissions, projects, sessions, streams
 from .state import AppState
 
 log = logging.getLogger(__name__)
@@ -49,4 +49,5 @@ def create_app(
     app.include_router(projects.router)
     app.include_router(sessions.router)
     app.include_router(streams.router)
+    app.include_router(permissions.router)
     return app
