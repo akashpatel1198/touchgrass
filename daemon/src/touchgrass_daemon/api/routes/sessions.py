@@ -6,6 +6,7 @@ from typing import cast
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 
+from ...changelog import write_changelog
 from ...store import Message as MessageRow
 from ..auth import require_bearer
 from ..state import AppState
@@ -85,3 +86,38 @@ async def submit_prompt(
         )
     await hub.submit_prompt(body.text)
     return {"status": "queued"}
+
+
+class ChangelogOut(BaseModel):
+    path: str
+
+
+@router.post(
+    "/sessions/{session_id}/changelog", response_model=ChangelogOut
+)
+async def write_session_changelog(session_id: str, request: Request) -> ChangelogOut:
+    state = _state(request)
+    session = await asyncio.to_thread(state.store.get_session, session_id)
+    if session is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "session not found")
+    project = state.project(session.project_name)
+    if project is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            f"project {session.project_name!r} no longer in config",
+        )
+
+    messages = await asyncio.to_thread(state.store.get_messages, session_id)
+    summary: str | None = None
+    hub = state.get_hub(session_id)
+    if hub is not None:
+        summary = await hub.request_summary()
+
+    out_path = await asyncio.to_thread(
+        write_changelog,
+        project_path=project.path,
+        session=session,
+        messages=messages,
+        summary=summary,
+    )
+    return ChangelogOut(path=str(out_path))

@@ -124,7 +124,9 @@ async def test_assistant_text_persists_and_emits_event(
     await asyncio.wait_for(run_task, timeout=2)
 
     assert fake.connected and fake.disconnected
-    assert fake.queries == ["hello"]
+    # First query is the user prompt; the runner also fires a final summary
+    # query against the SDK on session completion (changelog flow).
+    assert fake.queries[0] == "hello"
     assert any(e.type == "session_status" and e.payload["status"] == "active" for e in events)
     assistant = next(e for e in events if e.type == "assistant_message")
     assert assistant.payload == {"text": "hi there"}
@@ -273,6 +275,98 @@ async def test_ntfy_fires_on_completed_session(
             break
         await asyncio.sleep(0.02)
     assert captured == ["Session complete"]
+
+
+@pytest.mark.asyncio
+async def test_changelog_written_on_session_complete(
+    store: SessionStore, project: ProjectConfig
+) -> None:
+    factory, _fake = FakeSDKClient.factory(
+        [
+            # First script: response to the user prompt.
+            [
+                AssistantMessage(content=[TextBlock(text="ack")], model="claude-test"),
+                _result_message(),
+            ],
+            # Second script: response to the summary prompt.
+            [
+                AssistantMessage(
+                    content=[
+                        TextBlock(
+                            text=(
+                                "## Summary\n- did stuff\n\n"
+                                "## Files touched\n- a.py\n\n"
+                                "## Open threads\n_none_\n\n"
+                                "## Next steps\n- tests"
+                            )
+                        )
+                    ],
+                    model="claude-test",
+                ),
+                _result_message(),
+            ],
+        ]
+    )
+    queue: asyncio.Queue[Event] = asyncio.Queue()
+    session = store.create_session(project.name, goal="ship feature")
+    runner = SessionRunner(
+        project=project,
+        session_id=session.id,
+        store=store,
+        event_queue=queue,
+        goal="ship feature",
+        client_factory=factory,
+    )
+    await runner.start()
+    run_task = asyncio.create_task(runner.run())
+    await runner.submit_prompt("do the thing")
+    await _collect_until(queue, predicate=lambda e: e.type == "assistant_message")
+    await runner.stop()
+    await asyncio.wait_for(run_task, timeout=2)
+
+    changelog_path = project.path / ".touchgrass" / "sessions" / f"{session.id}.md"
+    assert changelog_path.exists()
+    body = changelog_path.read_text()
+    assert "ship feature" in body
+    assert "did stuff" in body
+    # Project's gitignore now includes .touchgrass/.
+    assert ".touchgrass/" in (project.path / ".gitignore").read_text()
+
+
+@pytest.mark.asyncio
+async def test_changelog_falls_back_when_summary_fails(
+    store: SessionStore, project: ProjectConfig
+) -> None:
+    factory, _fake = FakeSDKClient.factory(
+        [
+            [
+                AssistantMessage(content=[TextBlock(text="hi")], model="claude-test"),
+                _result_message(),
+            ],
+            # No second script — the summary call will raise inside FakeSDKClient
+            # and request_summary() returns None, triggering the templated body.
+        ]
+    )
+    queue: asyncio.Queue[Event] = asyncio.Queue()
+    session = store.create_session(project.name)
+    runner = SessionRunner(
+        project=project,
+        session_id=session.id,
+        store=store,
+        event_queue=queue,
+        client_factory=factory,
+    )
+    await runner.start()
+    run_task = asyncio.create_task(runner.run())
+    await runner.submit_prompt("hi")
+    await _collect_until(queue, predicate=lambda e: e.type == "assistant_message")
+    await runner.stop()
+    await asyncio.wait_for(run_task, timeout=2)
+
+    body = (
+        project.path / ".touchgrass" / "sessions" / f"{session.id}.md"
+    ).read_text()
+    assert "_Auto-generated fallback" in body
 
 
 @pytest.mark.asyncio

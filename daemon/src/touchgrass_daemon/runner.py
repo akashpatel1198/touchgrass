@@ -34,6 +34,7 @@ from claude_agent_sdk import (
     UserMessage,
 )
 
+from .changelog import load_summary_prompt, write_changelog
 from .config import ProjectConfig
 from .events import Event
 from .notifications import NtfyClient
@@ -116,13 +117,11 @@ class SessionRunner:
         await self._emit_status("active")
 
     async def stop(self) -> None:
+        """Signal the run loop to exit. Disconnection happens in `run()`'s finally
+        so the completion path (summary + changelog) can still use the SDK client.
+        Callers that need to block until cleanup completes should await the run task.
+        """
         self._stop_requested.set()
-        if self._client is not None:
-            try:
-                await self._client.disconnect()
-            except Exception:
-                log.exception("error disconnecting SDK client for session %s", self._session_id)
-            self._client = None
 
     async def submit_prompt(self, text: str) -> None:
         """Enqueue a user turn. Returns immediately — the run loop processes it."""
@@ -134,27 +133,49 @@ class SessionRunner:
         if self._client is None:
             raise RuntimeError("SessionRunner.start() must be called before run()")
         try:
-            while not self._stop_requested.is_set():
-                prompt = await self._next_prompt_or_stop()
-                if prompt is None:
-                    # Stop was requested. Fall through to the completion path
-                    # rather than returning early — that's how a session ends
-                    # cleanly with status=completed.
-                    break
-                await self._drive_turn(prompt.text)
-                prompt.done.set()
-            await self._update_status_threadsafe("completed")
-            await self._emit_status("completed")
-            await self._notify_session_terminal("completed")
-        except Exception as exc:
-            log.exception("session %s failed in run loop", self._session_id)
-            await self._emit_event(
-                Event("error", self._session_id, {"message": str(exc)})
+            try:
+                while not self._stop_requested.is_set():
+                    prompt = await self._next_prompt_or_stop()
+                    if prompt is None:
+                        # Stop was requested. Fall through to the completion path
+                        # rather than returning early — that's how a session ends
+                        # cleanly with status=completed.
+                        break
+                    await self._drive_turn(prompt.text)
+                    prompt.done.set()
+                # Pull a summary while the SDK client is still connected, then
+                # persist the changelog. Both are best-effort — failures here
+                # shouldn't keep the session from finishing cleanly.
+                summary = await self.request_summary()
+                await self._write_changelog_safe(summary)
+                await self._update_status_threadsafe("completed")
+                await self._emit_status("completed")
+                await self._notify_session_terminal("completed")
+            except Exception as exc:
+                log.exception("session %s failed in run loop", self._session_id)
+                await self._emit_event(
+                    Event("error", self._session_id, {"message": str(exc)})
+                )
+                # Don't try a summary on the error path; the SDK client's state is
+                # suspect. Write the changelog with the templated fallback.
+                await self._write_changelog_safe(None)
+                await self._update_status_threadsafe("failed")
+                await self._emit_status("failed")
+                await self._notify_session_terminal("failed")
+                raise
+        finally:
+            await self._disconnect_client()
+
+    async def _disconnect_client(self) -> None:
+        if self._client is None:
+            return
+        try:
+            await self._client.disconnect()
+        except Exception:
+            log.exception(
+                "error disconnecting SDK client for session %s", self._session_id
             )
-            await self._update_status_threadsafe("failed")
-            await self._emit_status("failed")
-            await self._notify_session_terminal("failed")
-            raise
+        self._client = None
 
     # --- Internals -------------------------------------------------------------
 
@@ -307,3 +328,50 @@ class SessionRunner:
             goal=self._goal,
             status=status,
         )
+
+    async def request_summary(self) -> str | None:
+        """Drive a final SDK turn asking Claude to summarize this session.
+
+        Output is NOT persisted to the message log or emitted as events — it's
+        consumed only by the changelog writer. Returns None on any failure;
+        callers fall back to the templated body.
+        """
+        if self._client is None:
+            return None
+        try:
+            await self._client.query(load_summary_prompt())
+            text_parts: list[str] = []
+            async for message in self._client.receive_response():
+                if isinstance(message, AssistantMessage):
+                    for block in message.content:
+                        if isinstance(block, TextBlock):
+                            text_parts.append(block.text)
+            joined = "\n".join(text_parts).strip()
+            return joined or None
+        except Exception:
+            log.exception(
+                "summary SDK turn failed for session %s", self._session_id
+            )
+            return None
+
+    async def _write_changelog_safe(self, summary: str | None) -> None:
+        try:
+            session = await asyncio.to_thread(
+                self._store.get_session, self._session_id
+            )
+            messages = await asyncio.to_thread(
+                self._store.get_messages, self._session_id
+            )
+            if session is None:
+                return
+            await asyncio.to_thread(
+                write_changelog,
+                project_path=self._project.path,
+                session=session,
+                messages=messages,
+                summary=summary,
+            )
+        except Exception:
+            log.exception(
+                "changelog write failed for session %s", self._session_id
+            )

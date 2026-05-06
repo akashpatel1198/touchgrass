@@ -46,6 +46,9 @@ class SessionHub:
     async def submit_prompt(self, text: str) -> None:
         await self._runner.submit_prompt(text)
 
+    async def request_summary(self) -> str | None:
+        return await self._runner.request_summary()
+
     async def stop(self) -> None:
         await self._runner.stop()
         if self._run_task is not None:

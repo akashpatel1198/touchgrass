@@ -151,6 +151,20 @@
             "description": "Returns 202 immediately; the assistant turn is processed async. Watch the WebSocket (or poll GET /sessions/:id/messages) for the response."
           },
           "response": []
+        },
+        {
+          "name": "Write changelog now",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/sessions/{{session_id}}/changelog",
+              "host": ["{{base_url}}"],
+              "path": ["sessions", "{{session_id}}", "changelog"]
+            },
+            "description": "Forces an immediate write of `<project>/.touchgrass/sessions/<id>.md` without ending the session. If the session is still active, asks Claude for a fresh summary; otherwise falls back to a templated body built from the message log. Returns the written path."
+          },
+          "response": []
         }
       ]
     },

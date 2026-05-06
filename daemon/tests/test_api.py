@@ -279,3 +279,33 @@ def test_permissions_endpoints_require_bearer(client: TestClient) -> None:
         ).status_code
         == 401
     )
+
+
+def test_on_demand_changelog_writes_file(client: TestClient) -> None:
+    state = client.app.state.touchgrass  # type: ignore[attr-defined]
+    project_path = state.config.projects[0].path
+
+    create = client.post(
+        "/projects/myproj/sessions",
+        json={"goal": "investigate the auth bug"},
+        headers=HEADERS,
+    )
+    session_id = create.json()["session_id"]
+
+    response = client.post(
+        f"/sessions/{session_id}/changelog", headers=HEADERS
+    )
+    assert response.status_code == 200
+    out_path = response.json()["path"]
+    assert out_path.endswith(f"{session_id}.md")
+
+    body = (
+        project_path / ".touchgrass" / "sessions" / f"{session_id}.md"
+    ).read_text()
+    assert "investigate the auth bug" in body
+    assert ".touchgrass/" in (project_path / ".gitignore").read_text()
+
+
+def test_on_demand_changelog_unknown_session_404(client: TestClient) -> None:
+    response = client.post("/sessions/nope/changelog", headers=HEADERS)
+    assert response.status_code == 404
