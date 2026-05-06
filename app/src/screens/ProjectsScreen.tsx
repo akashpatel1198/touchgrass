@@ -1,120 +1,308 @@
-// Stub for §3. §1 renders a "connected" debug page that fires GET /health and
-// shows the result, so first-run verification passes without §2/§3 wiring.
+// Project picker. Fetches GET /projects on mount and on pull-to-refresh.
+// Last-picked project is surfaced as a prominent "Resume" card at the top so
+// the common case is one tap away.
+//
+// Tap a project → navigate to Sessions for that project. The actual session
+// list rendering lands in §4.
 
-import { useEffect, useState } from "react";
-import { ActivityIndicator, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { useNavigation } from "@react-navigation/native";
+import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
+import { useCallback, useEffect, useState } from "react";
+import {
+  ActivityIndicator,
+  FlatList,
+  Pressable,
+  RefreshControl,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { ApiError, api } from "../api/client";
-import { clearConfig, type ClientConfig } from "../storage/config";
+import type { Project } from "../api/types";
+import { useLockState } from "../auth/useLockState";
+import {
+  getLastProject,
+  setLastProject,
+  type ClientConfig,
+} from "../storage/config";
 import { colors, fontSizes, radii, spacing } from "../theme";
+import type { RootStackParamList } from "../navigation/types";
+
+type Nav = NativeStackNavigationProp<RootStackParamList, "Projects">;
 
 interface Props {
   config: ClientConfig;
   onResetConfig: () => void;
 }
 
+type FetchState =
+  | { kind: "loading" }
+  | { kind: "ok"; projects: Project[] }
+  | { kind: "error"; message: string };
+
 export function ProjectsScreen({ config, onResetConfig }: Props) {
-  const [healthState, setHealthState] = useState<
-    | { kind: "loading" }
-    | { kind: "ok" }
-    | { kind: "error"; message: string }
-  >({ kind: "loading" });
+  const navigation = useNavigation<Nav>();
+  const { lock } = useLockState();
+  const [state, setState] = useState<FetchState>({ kind: "loading" });
+  const [refreshing, setRefreshing] = useState(false);
+  const [lastPicked, setLastPicked] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const projects = await api.listProjects(config);
+      setState({ kind: "ok", projects });
+    } catch (exc) {
+      setState({ kind: "error", message: messageFor(exc) });
+    }
+  }, [config]);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      try {
-        await api.health(config);
-        if (!cancelled) setHealthState({ kind: "ok" });
-      } catch (exc) {
-        if (cancelled) return;
-        const message = exc instanceof ApiError ? exc.message : "unknown error";
-        setHealthState({ kind: "error", message });
-      }
+      const [, last] = await Promise.all([load(), getLastProject()]);
+      if (!cancelled) setLastPicked(last);
     })();
     return () => {
       cancelled = true;
     };
-  }, [config]);
+  }, [load]);
 
-  const onReset = async () => {
-    await clearConfig();
-    onResetConfig();
+  const onRefresh = async () => {
+    setRefreshing(true);
+    await load();
+    setRefreshing(false);
+  };
+
+  const onPick = async (name: string) => {
+    await setLastProject(name);
+    setLastPicked(name);
+    navigation.navigate("Sessions", { projectName: name });
   };
 
   return (
     <SafeAreaView style={styles.safe}>
-      <View style={styles.content}>
-        <Text style={styles.title}>Connected</Text>
-        <Text style={styles.subtitle}>{config.baseUrl}</Text>
-
-        <View style={styles.statusCard}>
-          {healthState.kind === "loading" && <ActivityIndicator color={colors.accent} />}
-          {healthState.kind === "ok" && (
-            <>
-              <Text style={[styles.statusBadge, styles.statusBadgeOk]}>healthy</Text>
-              <Text style={styles.statusBody}>Daemon is responding to /health.</Text>
-            </>
-          )}
-          {healthState.kind === "error" && (
-            <>
-              <Text style={[styles.statusBadge, styles.statusBadgeBad]}>unreachable</Text>
-              <Text style={styles.statusBody}>{healthState.message}</Text>
-            </>
-          )}
+      <View style={styles.header}>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.title}>Projects</Text>
+          <Text style={styles.subtitle}>{config.baseUrl}</Text>
         </View>
-
-        <Text style={styles.placeholder}>
-          Project picker lands in phase 3 §3.{"\n"}
-          For now this is the post-setup landing screen.
-        </Text>
-
-        <TouchableOpacity style={styles.resetButton} onPress={onReset}>
-          <Text style={styles.resetText}>Reset connection</Text>
-        </TouchableOpacity>
+        <Pressable onPress={lock} style={styles.headerAction}>
+          <Text style={styles.headerActionText}>Lock</Text>
+        </Pressable>
       </View>
+
+      <Body
+        state={state}
+        refreshing={refreshing}
+        onRefresh={onRefresh}
+        lastPicked={lastPicked}
+        onPick={onPick}
+        onResetConfig={onResetConfig}
+      />
     </SafeAreaView>
   );
 }
 
+interface BodyProps {
+  state: FetchState;
+  refreshing: boolean;
+  onRefresh: () => Promise<void> | void;
+  lastPicked: string | null;
+  onPick: (name: string) => void;
+  onResetConfig: () => void;
+}
+
+function Body({
+  state,
+  refreshing,
+  onRefresh,
+  lastPicked,
+  onPick,
+  onResetConfig,
+}: BodyProps) {
+  if (state.kind === "loading") {
+    return (
+      <View style={styles.center}>
+        <ActivityIndicator color={colors.accent} />
+      </View>
+    );
+  }
+  if (state.kind === "error") {
+    return (
+      <View style={styles.center}>
+        <Text style={styles.errorTitle}>Can&apos;t reach the daemon</Text>
+        <Text style={styles.errorBody}>{state.message}</Text>
+        <Pressable style={styles.errorButton} onPress={onRefresh}>
+          <Text style={styles.errorButtonText}>Try again</Text>
+        </Pressable>
+        <Pressable style={styles.linkButton} onPress={onResetConfig}>
+          <Text style={styles.linkButtonText}>Edit connection</Text>
+        </Pressable>
+      </View>
+    );
+  }
+
+  const ordered = orderedWithResume(state.projects, lastPicked);
+
+  if (ordered.length === 0) {
+    return (
+      <View style={styles.center}>
+        <Text style={styles.emptyTitle}>No projects configured</Text>
+        <Text style={styles.emptyBody}>
+          Edit <Text style={styles.code}>~/.touchgrass/config.yaml</Text> on your
+          laptop and restart the daemon.
+        </Text>
+      </View>
+    );
+  }
+
+  return (
+    <FlatList
+      data={ordered}
+      keyExtractor={(item) => item.project.name}
+      contentContainerStyle={styles.list}
+      refreshControl={
+        <RefreshControl
+          refreshing={refreshing}
+          onRefresh={onRefresh}
+          tintColor={colors.accent}
+        />
+      }
+      renderItem={({ item }) => (
+        <ProjectCard
+          project={item.project}
+          isLastPicked={item.isLastPicked}
+          onPress={() => onPick(item.project.name)}
+        />
+      )}
+    />
+  );
+}
+
+interface CardItem {
+  project: Project;
+  isLastPicked: boolean;
+}
+
+function orderedWithResume(
+  projects: Project[],
+  lastPicked: string | null,
+): CardItem[] {
+  if (!lastPicked) return projects.map((p) => ({ project: p, isLastPicked: false }));
+  const matched = projects.find((p) => p.name === lastPicked);
+  if (!matched) {
+    return projects.map((p) => ({ project: p, isLastPicked: false }));
+  }
+  const rest = projects.filter((p) => p.name !== lastPicked);
+  return [
+    { project: matched, isLastPicked: true },
+    ...rest.map((p) => ({ project: p, isLastPicked: false })),
+  ];
+}
+
+interface CardProps {
+  project: Project;
+  isLastPicked: boolean;
+  onPress: () => void;
+}
+
+function ProjectCard({ project, isLastPicked, onPress }: CardProps) {
+  return (
+    <Pressable
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.card,
+        isLastPicked && styles.cardResume,
+        pressed && styles.cardPressed,
+      ]}
+      android_ripple={{ color: colors.surfaceElevated }}
+    >
+      {isLastPicked && <Text style={styles.resumeLabel}>RESUME</Text>}
+      <Text style={styles.cardTitle}>{project.name}</Text>
+      <Text style={styles.cardPath} numberOfLines={1}>
+        {project.path}
+      </Text>
+    </Pressable>
+  );
+}
+
+function messageFor(exc: unknown): string {
+  if (exc instanceof ApiError) {
+    if (exc.kind === "network") {
+      return "Can't reach the daemon at this URL. Check Tailscale and that `make dev` is running.";
+    }
+    if (exc.kind === "unauthorized") {
+      return "Bearer token rejected. Tap 'Edit connection' below to re-paste it.";
+    }
+    return exc.message;
+  }
+  return "Unexpected error. Pull to retry.";
+}
+
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.bg },
-  content: { flex: 1, padding: spacing.lg, gap: spacing.lg },
-  title: { color: colors.text, fontSize: fontSizes.display, fontWeight: "600" },
-  subtitle: { color: colors.textMuted, fontSize: fontSizes.sm },
-  statusCard: {
-    backgroundColor: colors.surface,
-    borderRadius: radii.md,
+  header: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.md,
+    paddingBottom: spacing.md,
+    gap: spacing.md,
+  },
+  headerAction: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
     borderWidth: 1,
     borderColor: colors.border,
-    padding: spacing.md,
-    gap: spacing.sm,
+    borderRadius: radii.md,
   },
-  statusBadge: {
-    alignSelf: "flex-start",
+  headerActionText: { color: colors.textMuted, fontSize: fontSizes.sm },
+  title: { color: colors.text, fontSize: fontSizes.display, fontWeight: "600" },
+  subtitle: { color: colors.textDim, fontSize: fontSizes.xs, marginTop: 2 },
+
+  center: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    padding: spacing.lg,
+    gap: spacing.md,
+  },
+  errorTitle: { color: colors.text, fontSize: fontSizes.title, fontWeight: "600" },
+  errorBody: { color: colors.textMuted, fontSize: fontSizes.body, textAlign: "center", lineHeight: 22 },
+  errorButton: {
+    backgroundColor: colors.accent,
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.xl,
+    borderRadius: radii.md,
+    marginTop: spacing.sm,
+  },
+  errorButtonText: { color: colors.bg, fontSize: fontSizes.body, fontWeight: "600" },
+  linkButton: { paddingVertical: spacing.sm },
+  linkButtonText: { color: colors.textMuted, fontSize: fontSizes.sm },
+
+  emptyTitle: { color: colors.text, fontSize: fontSizes.title, fontWeight: "600" },
+  emptyBody: { color: colors.textMuted, fontSize: fontSizes.body, textAlign: "center", lineHeight: 22 },
+  code: { fontFamily: "monospace", color: colors.text },
+
+  list: { padding: spacing.lg, gap: spacing.md },
+  card: {
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radii.md,
+    padding: spacing.md,
+    gap: 4,
+  },
+  cardResume: { borderColor: colors.accent },
+  cardPressed: { opacity: 0.7 },
+  resumeLabel: {
+    color: colors.accent,
     fontSize: fontSizes.xs,
     fontWeight: "600",
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 2,
-    borderRadius: radii.sm,
-    overflow: "hidden",
+    letterSpacing: 1,
   },
-  statusBadgeOk: { backgroundColor: colors.accentMuted, color: colors.bg },
-  statusBadgeBad: { backgroundColor: colors.danger, color: colors.bg },
-  statusBody: { color: colors.text, fontSize: fontSizes.body },
-  placeholder: {
-    color: colors.textDim,
-    fontSize: fontSizes.sm,
-    lineHeight: 20,
-  },
-  resetButton: {
-    marginTop: "auto",
-    alignItems: "center",
-    paddingVertical: spacing.md,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radii.md,
-  },
-  resetText: { color: colors.textMuted, fontSize: fontSizes.sm },
+  cardTitle: { color: colors.text, fontSize: fontSizes.lg, fontWeight: "600" },
+  cardPath: { color: colors.textDim, fontSize: fontSizes.xs },
 });

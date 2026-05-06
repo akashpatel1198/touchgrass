@@ -16,9 +16,11 @@ import { ActivityIndicator, StyleSheet, View } from "react-native";
 
 import { hasPin } from "../auth/pin";
 import { LockProvider, useLockState } from "../auth/useLockState";
+import { ChatScreen } from "../screens/ChatScreen";
 import { PinEntryScreen } from "../screens/PinEntryScreen";
 import { PinSetScreen } from "../screens/PinSetScreen";
 import { ProjectsScreen } from "../screens/ProjectsScreen";
+import { SessionsScreen } from "../screens/SessionsScreen";
 import { SettingsScreen } from "../screens/SettingsScreen";
 import {
   isComplete,
@@ -93,21 +95,21 @@ function RootRouter() {
     setPartial({ baseUrl: null, bearerToken: null, ntfyTopic: null });
   };
 
-  let screen: React.ReactNode;
+  let stack: React.ReactNode;
   if (!isComplete(partial)) {
-    screen = (
+    stack = (
       <Stack.Screen name="Settings">
         {() => <SettingsScreen initial={partial} onSaved={onConfigSaved} />}
       </Stack.Screen>
     );
   } else if (!pinIsSet) {
-    screen = (
+    stack = (
       <Stack.Screen name="PinGate">
         {() => <PinSetScreen onPinSet={onPinSet} />}
       </Stack.Screen>
     );
   } else if (!unlocked) {
-    screen = (
+    stack = (
       <Stack.Screen name="PinGate">
         {() => (
           <PinEntryScreen onUnlock={unlock} onForgotComplete={onForgotComplete} />
@@ -115,21 +117,26 @@ function RootRouter() {
       </Stack.Screen>
     );
   } else {
-    screen = (
-      <Stack.Screen name="Projects">
-        {() => (
-          <ProjectsScreen
-            config={partial as ClientConfig}
-            onResetConfig={onResetConfig}
-          />
-        )}
-      </Stack.Screen>
+    // Unlocked: register Projects + Sessions + Chat so navigation pushes work.
+    stack = (
+      <>
+        <Stack.Screen name="Projects">
+          {() => (
+            <ProjectsScreen
+              config={partial as ClientConfig}
+              onResetConfig={onResetConfig}
+            />
+          )}
+        </Stack.Screen>
+        <Stack.Screen name="Sessions" component={SessionsScreen} />
+        <Stack.Screen name="Chat" component={ChatScreen} />
+      </>
     );
   }
 
   return (
     <NavigationContainer theme={navTheme}>
-      <Stack.Navigator screenOptions={{ headerShown: false }}>{screen}</Stack.Navigator>
+      <Stack.Navigator screenOptions={{ headerShown: false }}>{stack}</Stack.Navigator>
     </NavigationContainer>
   );
 }
