@@ -111,11 +111,19 @@ class SessionRunner:
         options = ClaudeAgentOptions(
             cwd=self._project.path,
             can_use_tool=self._can_use_tool,
-            # Don't inherit ~/.claude/settings.json or project .claude/ — touchgrass
-            # has its own allow list (config.yaml + the broker's runtime grants).
-            # Without this the SDK auto-allows anything matching the user's existing
-            # Claude Code CLI permissions, bypassing canUseTool entirely.
-            setting_sources=[],
+            # Hybrid permission model: the bundled Claude Code CLI handles
+            # routine auto-approval for safe read-only tools (Read, Glob, Grep,
+            # LS, ls-style Bash) and respects the user's existing
+            # ~/.claude/settings.json allow patterns. Anything the CLI decides
+            # needs a prompt is forwarded to our `_can_use_tool` callback over
+            # stdio, where the touchgrass broker takes over: pre_approved_tools
+            # / pre_denied_tools short-circuit, everything else fires an ntfy
+            # push and awaits a phone decision.
+            #
+            # We previously tried to force position B (touchgrass as the only
+            # authority) via setting_sources=[] and HOME isolation. The bundled
+            # CLI auto-approves "safe" tools regardless, so position B isn't
+            # achievable without forking the CLI. See parking-lot.md item 4.
         )
         self._client = self._client_factory(options)
         await self._client.connect()
@@ -278,6 +286,11 @@ class SessionRunner:
         context: ToolPermissionContext,
     ) -> PermissionResultAllow | PermissionResultDeny:
         del context  # unused
+        log.debug(
+            "canUseTool invoked: session=%s tool=%s",
+            self._session_id,
+            tool_name,
+        )
         if self._broker is None:
             # No broker wired (test fixtures, or future ad-hoc tools). Allow-all is
             # the safe default *only* in tests; production constructs a broker.
