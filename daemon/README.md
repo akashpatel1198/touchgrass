@@ -24,6 +24,22 @@ python -m venv .venv && source .venv/bin/activate
 pip install -e '.[dev]'
 ```
 
+## Don't skip this — sleep prevention
+
+If your laptop sleeps while a session is running, the SDK process dies, in-flight
+tool calls are orphaned, and any pending permission requests time out to deny.
+Always run the daemon under a sleep-prevention shim. The repo-root `make dev`
+target picks the right one for your OS:
+
+- **macOS:** `caffeinate -i uv run touchgrass-daemon`
+- **Linux:** `systemd-inhibit --what=sleep uv run touchgrass-daemon`
+
+You can verify macOS isn't sleeping with:
+
+```bash
+pmset -g assertions | grep PreventUserIdleSystemSleep
+```
+
 ## Layout
 
 ```

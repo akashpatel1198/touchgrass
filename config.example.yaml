@@ -2,31 +2,19 @@
 # Multi-project from day one — list every project the daemon should be willing to
 # run sessions against. There is no single-project shortcut.
 
+
 projects:
-  - name: my-app
-    path: ~/code/my-app
-    # Tools listed here auto-allow without a phone prompt. Keep this list tight —
-    # everything not listed prompts you on the phone.
+  - name: scratch
+    path: <FILL IN — absolute path to a low-stakes repo on your machine>
     pre_approved_tools: []
-    # Tools listed here auto-deny. Useful for things you never want to run remotely.
     pre_denied_tools: []
 
-  - name: side-project
-    path: ~/code/side-project
-
-# Push notifications via ntfy.sh. Pick something unguessable — anyone with the
-# topic name can read your notifications.
 ntfy:
-  topic: touchgrass-CHANGEME-pick-something-random
+  topic: touchgrass-placeholder-phase2
 
-# Bearer token for the daemon's HTTP/WebSocket API. Tailscale gates network reach;
-# this is belt-and-suspenders. Use a long random string (≥16 chars).
-bearer_token: replace-with-a-long-random-string-please
+bearer_token: <FILL IN — run: openssl rand -hex 24>
 
-# How long to wait for a permission decision from the phone before defaulting to
-# deny. 5 minutes is a reasonable default.
 permission_timeout_seconds: 300
-
-# Where the daemon listens. 0.0.0.0 lets Tailscale route in from your phone.
 bind_address: 0.0.0.0
 port: 8765
+
