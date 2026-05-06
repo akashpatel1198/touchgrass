@@ -111,6 +111,11 @@ class SessionRunner:
         options = ClaudeAgentOptions(
             cwd=self._project.path,
             can_use_tool=self._can_use_tool,
+            # Don't inherit ~/.claude/settings.json or project .claude/ — touchgrass
+            # has its own allow list (config.yaml + the broker's runtime grants).
+            # Without this the SDK auto-allows anything matching the user's existing
+            # Claude Code CLI permissions, bypassing canUseTool entirely.
+            setting_sources=[],
         )
         self._client = self._client_factory(options)
         await self._client.connect()
