@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 
 from ..config import Config, ProjectConfig
 from ..events import Event
+from ..notifications import NtfyClient
 from ..permissions import PermissionBroker
 from ..runner import SDKClientFactory, SessionRunner, _default_client_factory
 from ..store import SessionStore
@@ -21,12 +22,17 @@ class AppState:
     config: Config
     store: SessionStore
     client_factory: SDKClientFactory = field(default=_default_client_factory)
+    ntfy: NtfyClient | None = None
     broker: PermissionBroker = field(init=False)
     hubs: dict[str, SessionHub] = field(default_factory=dict)
     _hubs_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    _owns_ntfy: bool = field(default=False, init=False)
 
     def __post_init__(self) -> None:
-        self.broker = PermissionBroker(self.config, self.store)
+        if self.ntfy is None:
+            self.ntfy = NtfyClient(self.config.ntfy.topic)
+            self._owns_ntfy = True
+        self.broker = PermissionBroker(self.config, self.store, ntfy=self.ntfy)
 
     def project(self, name: str) -> ProjectConfig | None:
         return next((p for p in self.config.projects if p.name == name), None)
@@ -44,6 +50,8 @@ class AppState:
             store=self.store,
             event_queue=queue,
             broker=self.broker,
+            ntfy=self.ntfy,
+            goal=goal,
             client_factory=self.client_factory,
         )
         hub = SessionHub(runner, queue)
@@ -70,4 +78,9 @@ class AppState:
                 )
             except Exception:
                 log.exception("error marking session %s failed", hub.session_id)
+        if self._owns_ntfy and self.ntfy is not None:
+            try:
+                await self.ntfy.aclose()
+            except Exception:
+                log.exception("error closing ntfy client")
         self.store.close()

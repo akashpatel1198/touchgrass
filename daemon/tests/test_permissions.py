@@ -9,6 +9,7 @@ from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
 
 from touchgrass_daemon.config import Config
 from touchgrass_daemon.events import Event
+from touchgrass_daemon.notifications import NtfyClient
 from touchgrass_daemon.permissions import PermissionBroker
 from touchgrass_daemon.store import SessionStore
 
@@ -295,6 +296,87 @@ async def test_resolve_unknown_id_raises(
     broker = PermissionBroker(_project_with_lists(tmp_path), store)
     with pytest.raises(KeyError, match="no pending"):
         await broker.resolve("nope", "allow_once")
+
+
+@pytest.mark.asyncio
+async def test_ntfy_fires_on_unlisted_request(
+    tmp_path: Path, store: SessionStore
+) -> None:
+    import httpx
+
+    captured: list[str] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(request.headers.get("title", ""))
+        return httpx.Response(200)
+
+    transport = httpx.MockTransport(handler)
+    ntfy = NtfyClient("topic", client=httpx.AsyncClient(transport=transport))
+
+    config = _project_with_lists(tmp_path)
+    broker = PermissionBroker(config, store, ntfy=ntfy)
+    queue: asyncio.Queue[Event] = asyncio.Queue()
+    session_id = await _create_session_id(store)
+
+    task = asyncio.create_task(
+        broker.request(
+            session_id=session_id,
+            project_name="proj",
+            tool_name="Edit",
+            tool_input={"path": "x"},
+            event_queue=queue,
+        )
+    )
+    request_id: str | None = None
+    for _ in range(20):
+        try:
+            event = await asyncio.wait_for(queue.get(), timeout=0.5)
+        except TimeoutError:
+            break
+        if event.type == "permission_request":
+            request_id = event.payload["request_id"]
+            break
+    assert request_id is not None
+
+    # Ntfy fires after the event is enqueued.
+    for _ in range(20):
+        if captured:
+            break
+        await asyncio.sleep(0.02)
+    assert captured == ["Permission needed"]
+
+    await broker.resolve(request_id, "deny")
+    await asyncio.wait_for(task, timeout=2)
+
+
+@pytest.mark.asyncio
+async def test_ntfy_not_called_for_pre_approved(
+    tmp_path: Path, store: SessionStore
+) -> None:
+    import httpx
+
+    captured: list[str] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        captured.append("called")
+        return httpx.Response(200)
+
+    transport = httpx.MockTransport(handler)
+    ntfy = NtfyClient("topic", client=httpx.AsyncClient(transport=transport))
+
+    config = _project_with_lists(tmp_path, pre_approved=["Read"])
+    broker = PermissionBroker(config, store, ntfy=ntfy)
+    queue: asyncio.Queue[Event] = asyncio.Queue()
+    session_id = await _create_session_id(store)
+
+    await broker.request(
+        session_id=session_id,
+        project_name="proj",
+        tool_name="Read",
+        tool_input={"path": "x"},
+        event_queue=queue,
+    )
+    assert captured == []
 
 
 @pytest.mark.asyncio

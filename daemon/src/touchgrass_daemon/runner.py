@@ -36,6 +36,7 @@ from claude_agent_sdk import (
 
 from .config import ProjectConfig
 from .events import Event
+from .notifications import NtfyClient
 from .permissions import PermissionBroker
 from .store import SessionStore
 
@@ -83,6 +84,8 @@ class SessionRunner:
         store: SessionStore,
         event_queue: asyncio.Queue[Event],
         broker: PermissionBroker | None = None,
+        ntfy: NtfyClient | None = None,
+        goal: str | None = None,
         client_factory: SDKClientFactory = _default_client_factory,
     ) -> None:
         self._project = project
@@ -90,6 +93,8 @@ class SessionRunner:
         self._store = store
         self._events = event_queue
         self._broker = broker
+        self._ntfy = ntfy
+        self._goal = goal
         self._client_factory = client_factory
         self._prompt_queue: asyncio.Queue[_Prompt] = asyncio.Queue()
         self._client: SDKClientLike | None = None
@@ -132,11 +137,15 @@ class SessionRunner:
             while not self._stop_requested.is_set():
                 prompt = await self._next_prompt_or_stop()
                 if prompt is None:
-                    return
+                    # Stop was requested. Fall through to the completion path
+                    # rather than returning early — that's how a session ends
+                    # cleanly with status=completed.
+                    break
                 await self._drive_turn(prompt.text)
                 prompt.done.set()
-            await self._emit_status("completed")
             await self._update_status_threadsafe("completed")
+            await self._emit_status("completed")
+            await self._notify_session_terminal("completed")
         except Exception as exc:
             log.exception("session %s failed in run loop", self._session_id)
             await self._emit_event(
@@ -144,6 +153,7 @@ class SessionRunner:
             )
             await self._update_status_threadsafe("failed")
             await self._emit_status("failed")
+            await self._notify_session_terminal("failed")
             raise
 
     # --- Internals -------------------------------------------------------------
@@ -286,4 +296,14 @@ class SessionRunner:
             self._store.update_session_status,
             self._session_id,
             status,  # type: ignore[arg-type]
+        )
+
+    async def _notify_session_terminal(self, status: str) -> None:
+        if self._ntfy is None:
+            return
+        await self._ntfy.notify_session_complete(
+            session_id=self._session_id,
+            project_name=self._project.name,
+            goal=self._goal,
+            status=status,
         )

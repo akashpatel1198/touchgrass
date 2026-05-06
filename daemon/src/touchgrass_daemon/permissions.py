@@ -24,6 +24,7 @@ from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
 
 from .config import Config
 from .events import Event
+from .notifications import NtfyClient
 from .store import PermissionStatus, SessionStore
 
 log = logging.getLogger(__name__)
@@ -49,9 +50,16 @@ class _PendingEntry:
 
 
 class PermissionBroker:
-    def __init__(self, config: Config, store: SessionStore) -> None:
+    def __init__(
+        self,
+        config: Config,
+        store: SessionStore,
+        *,
+        ntfy: NtfyClient | None = None,
+    ) -> None:
         self._config = config
         self._store = store
+        self._ntfy = ntfy
         self._allow: dict[str, set[str]] = {
             p.name: set(p.pre_approved_tools) for p in config.projects
         }
@@ -176,6 +184,15 @@ class PermissionBroker:
                 },
             )
         )
+
+        if self._ntfy is not None:
+            await self._ntfy.notify_permission_request(
+                session_id=session_id,
+                project_name=project_name,
+                tool_name=tool_name,
+                tool_args=tool_input,
+                request_id=request.id,
+            )
 
         try:
             decision = await asyncio.wait_for(

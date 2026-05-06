@@ -19,6 +19,7 @@ from claude_agent_sdk import (
 
 from touchgrass_daemon.config import ProjectConfig
 from touchgrass_daemon.events import Event
+from touchgrass_daemon.notifications import NtfyClient
 from touchgrass_daemon.runner import SDKClientLike, SessionRunner
 from touchgrass_daemon.store import SessionStore
 
@@ -228,6 +229,50 @@ async def test_run_must_be_started_first(
     )
     with pytest.raises(RuntimeError, match="start"):
         await runner.run()
+
+
+@pytest.mark.asyncio
+async def test_ntfy_fires_on_completed_session(
+    store: SessionStore, project: ProjectConfig
+) -> None:
+    import httpx
+
+    captured: list[str] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(request.headers.get("title", ""))
+        return httpx.Response(200)
+
+    transport = httpx.MockTransport(handler)
+    ntfy = NtfyClient("topic", client=httpx.AsyncClient(transport=transport))
+
+    factory, _fake = FakeSDKClient.factory([[_result_message()]])
+    queue: asyncio.Queue[Event] = asyncio.Queue()
+    session = store.create_session(project.name, goal="my goal")
+    runner = SessionRunner(
+        project=project,
+        session_id=session.id,
+        store=store,
+        event_queue=queue,
+        ntfy=ntfy,
+        goal="my goal",
+        client_factory=factory,
+    )
+    await runner.start()
+    run_task = asyncio.create_task(runner.run())
+    # Yield so run() reaches its first await before we ask it to stop;
+    # otherwise stop() races ahead and nulls the SDK client before run()
+    # has even checked it.
+    await asyncio.sleep(0)
+    await runner.stop()
+    await asyncio.wait_for(run_task, timeout=2)
+
+    # Give the notify call a moment to fire after stop.
+    for _ in range(20):
+        if captured:
+            break
+        await asyncio.sleep(0.02)
+    assert captured == ["Session complete"]
 
 
 @pytest.mark.asyncio
