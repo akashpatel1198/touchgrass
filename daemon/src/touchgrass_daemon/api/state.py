@@ -72,12 +72,27 @@ class AppState:
                 await hub.stop()
             except Exception:
                 log.exception("error stopping hub %s during shutdown", hub.session_id)
+            # Only mark `failed` if the runner didn't already terminate the
+            # session itself. The graceful shutdown path goes:
+            #   hub.stop() -> runner exits its loop -> runner marks `completed`.
+            # Without this guard we'd overwrite that `completed` with `failed`,
+            # which surfaces in the phone session list as a wall of "failed"
+            # badges for every session you've ever cleanly ended.
             try:
-                await asyncio.to_thread(
-                    self.store.update_session_status, hub.session_id, "failed"
+                row = await asyncio.to_thread(
+                    self.store.get_session, hub.session_id
                 )
+                if row is not None and row.status not in ("completed", "failed"):
+                    await asyncio.to_thread(
+                        self.store.update_session_status,
+                        hub.session_id,
+                        "failed",
+                    )
             except Exception:
-                log.exception("error marking session %s failed", hub.session_id)
+                log.exception(
+                    "error reconciling shutdown status for session %s",
+                    hub.session_id,
+                )
         if self._owns_ntfy and self.ntfy is not None:
             try:
                 await self.ntfy.aclose()
