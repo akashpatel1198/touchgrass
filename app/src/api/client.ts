@@ -5,10 +5,13 @@
 import type {
   CreateSessionResponse,
   DecisionKind,
+  FileContentsResponse,
+  FileSummaryResponse,
   Message,
   PermissionRequest,
   Project,
   Session,
+  TreeEntry,
 } from "./types";
 
 const REQUEST_TIMEOUT_MS = 15_000;
@@ -165,4 +168,28 @@ export const api = {
       `/permissions/${requestId}/decision`,
       { decision },
     ),
+  listTree: (config: ApiConfig, projectName: string, path: string) => {
+    const qs = new URLSearchParams({ path });
+    return request<TreeEntry[]>(
+      config,
+      "GET",
+      `/projects/${encodeURIComponent(projectName)}/tree?${qs.toString()}`,
+    );
+  },
+  getFileSummary: (config: ApiConfig, projectName: string, path: string) => {
+    const qs = new URLSearchParams({ path, summary: "true" });
+    return request<FileSummaryResponse>(
+      config,
+      "GET",
+      `/projects/${encodeURIComponent(projectName)}/file?${qs.toString()}`,
+    );
+  },
+  getFileContents: (config: ApiConfig, projectName: string, path: string) => {
+    const qs = new URLSearchParams({ path, summary: "false" });
+    return request<FileContentsResponse>(
+      config,
+      "GET",
+      `/projects/${encodeURIComponent(projectName)}/file?${qs.toString()}`,
+    );
+  },
 };

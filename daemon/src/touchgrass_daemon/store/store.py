@@ -240,6 +240,39 @@ class SessionStore:
             ).fetchone()
         return _row_to_permission(row) if row else None
 
+    # --- File summaries cache --------------------------------------------------
+
+    def get_file_summary(
+        self, project_name: str, path: str
+    ) -> tuple[float, str] | None:
+        """Return `(file_mtime, summary)` or None. Caller compares mtime to disk
+        and decides cache hit vs invalidation."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT file_mtime, summary FROM file_summaries "
+                "WHERE project_name = ? AND path = ?",
+                (project_name, path),
+            ).fetchone()
+        if row is None:
+            return None
+        return float(row["file_mtime"]), row["summary"]
+
+    def upsert_file_summary(
+        self, project_name: str, path: str, file_mtime: float, summary: str
+    ) -> None:
+        created_at = _now_iso()
+        with self._lock, self._conn:
+            self._conn.execute(
+                "INSERT INTO file_summaries "
+                "(project_name, path, file_mtime, summary, created_at) "
+                "VALUES (?, ?, ?, ?, ?) "
+                "ON CONFLICT(project_name, path) DO UPDATE SET "
+                "file_mtime = excluded.file_mtime, "
+                "summary = excluded.summary, "
+                "created_at = excluded.created_at",
+                (project_name, path, file_mtime, summary, created_at),
+            )
+
     def list_pending_permission_requests(self) -> list[PermissionRequest]:
         with self._lock:
             rows = self._conn.execute(

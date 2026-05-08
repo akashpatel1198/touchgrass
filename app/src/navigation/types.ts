@@ -6,5 +6,6 @@ export type RootStackParamList = {
   Projects: undefined;
   Sessions: { projectName: string };
   Chat: { sessionId: string; permissionId?: string };
-  // Phase 4 §4: FileTree
+  FileTree: { projectName: string; path: string };
+  FileSummary: { projectName: string; path: string };
 };

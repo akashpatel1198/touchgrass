@@ -15,7 +15,8 @@ from fastapi import FastAPI
 from ..config import Config
 from ..runner import SDKClientFactory, _default_client_factory
 from ..store import SessionStore
-from .routes import health, permissions, projects, sessions, streams
+from ..summaries import SummaryGenerator, default_summary_generator
+from .routes import files, health, permissions, projects, sessions, streams
 from .state import AppState
 
 log = logging.getLogger(__name__)
@@ -26,12 +27,15 @@ def create_app(
     *,
     store: SessionStore | None = None,
     client_factory: SDKClientFactory = _default_client_factory,
+    summary_generator: SummaryGenerator = default_summary_generator,
 ) -> FastAPI:
-    """Construct the FastAPI app. `store` and `client_factory` are injectable for tests."""
+    """Construct the FastAPI app. `store`, `client_factory`, and
+    `summary_generator` are injectable for tests."""
     state = AppState(
         config=config,
         store=store or SessionStore(),
         client_factory=client_factory,
+        summary_generator=summary_generator,
     )
 
     @asynccontextmanager
@@ -50,4 +54,5 @@ def create_app(
     app.include_router(sessions.router)
     app.include_router(streams.router)
     app.include_router(permissions.router)
+    app.include_router(files.router)
     return app

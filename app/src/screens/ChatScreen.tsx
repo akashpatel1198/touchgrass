@@ -16,6 +16,7 @@ import {
   useRoute,
   type RouteProp,
 } from "@react-navigation/native";
+import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -57,6 +58,7 @@ import { colors, fontSizes, radii, spacing } from "../theme";
 import type { RootStackParamList } from "../navigation/types";
 
 type ChatRoute = RouteProp<RootStackParamList, "Chat">;
+type Nav = NativeStackNavigationProp<RootStackParamList, "Chat">;
 
 type Item =
   | { kind: "user"; id: string; text: string }
@@ -79,7 +81,7 @@ const NEAR_BOTTOM_PX = 80;
 
 export function ChatScreen() {
   const route = useRoute<ChatRoute>();
-  const navigation = useNavigation();
+  const navigation = useNavigation<Nav>();
   const { sessionId, permissionId } = route.params;
 
   const [config, setConfig] = useState<ClientConfig | null>(null);
@@ -350,6 +352,19 @@ export function ChatScreen() {
             </Text>
           </View>
         </View>
+        {session && (
+          <Pressable
+            style={styles.filesBtn}
+            onPress={() =>
+              navigation.navigate("FileTree", {
+                projectName: session.project_name,
+                path: "",
+              })
+            }
+          >
+            <Text style={styles.filesBtnText}>Files</Text>
+          </Pressable>
+        )}
       </View>
 
       {waiting && (
@@ -558,6 +573,14 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
   },
   headerWs: { color: colors.textDim, fontSize: fontSizes.xs },
+  filesBtn: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: radii.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  filesBtnText: { color: colors.text, fontSize: fontSizes.sm, fontWeight: "600" },
 
   banner: {
     backgroundColor: colors.warning,

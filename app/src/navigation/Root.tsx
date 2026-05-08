@@ -23,6 +23,8 @@ import { hasPin } from "../auth/pin";
 import { LockProvider, useLockState } from "../auth/useLockState";
 import { parseDeepLink, type ParsedDeepLink } from "../lib/deepLink";
 import { ChatScreen } from "../screens/ChatScreen";
+import { FileSummaryScreen } from "../screens/FileSummaryScreen";
+import { FileTreeScreen } from "../screens/FileTreeScreen";
 import { PinEntryScreen } from "../screens/PinEntryScreen";
 import { PinSetScreen } from "../screens/PinSetScreen";
 import { ProjectsScreen } from "../screens/ProjectsScreen";
@@ -180,6 +182,8 @@ function RootRouter() {
         </Stack.Screen>
         <Stack.Screen name="Sessions" component={SessionsScreen} />
         <Stack.Screen name="Chat" component={ChatScreen} />
+        <Stack.Screen name="FileTree" component={FileTreeScreen} />
+        <Stack.Screen name="FileSummary" component={FileSummaryScreen} />
       </>
     );
   }

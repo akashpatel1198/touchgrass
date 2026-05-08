@@ -12,6 +12,7 @@ from ..notifications import NtfyClient
 from ..permissions import PermissionBroker
 from ..runner import SDKClientFactory, SessionRunner, _default_client_factory
 from ..store import SessionStore
+from ..summaries import SummaryGenerator, default_summary_generator
 from .hub import SessionHub
 
 log = logging.getLogger(__name__)
@@ -22,6 +23,7 @@ class AppState:
     config: Config
     store: SessionStore
     client_factory: SDKClientFactory = field(default=_default_client_factory)
+    summary_generator: SummaryGenerator = field(default=default_summary_generator)
     ntfy: NtfyClient | None = None
     broker: PermissionBroker = field(init=False)
     hubs: dict[str, SessionHub] = field(default_factory=dict)

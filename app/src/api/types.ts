@@ -53,3 +53,21 @@ export interface PermissionRequest {
 export interface CreateSessionResponse {
   session_id: string;
 }
+
+export interface TreeEntry {
+  name: string;
+  type: "file" | "dir";
+  size: number | null;
+}
+
+export interface FileSummaryResponse {
+  path: string;
+  summary: string;
+  cached: boolean;
+}
+
+export interface FileContentsResponse {
+  path: string;
+  contents: string;
+  size: number;
+}

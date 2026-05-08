@@ -19,7 +19,7 @@ def store(tmp_path: Path) -> Iterator[SessionStore]:
 def test_migrate_creates_schema(tmp_path: Path) -> None:
     db = tmp_path / "fresh.db"
     version = migrate(db)
-    assert version == 1
+    assert version == 2
     with sqlite3.connect(db) as conn:
         tables = {
             row[0]
@@ -32,8 +32,8 @@ def test_migrate_creates_schema(tmp_path: Path) -> None:
 
 def test_migrate_is_idempotent(tmp_path: Path) -> None:
     db = tmp_path / "twice.db"
-    assert migrate(db) == 1
-    assert migrate(db) == 1
+    assert migrate(db) == 2
+    assert migrate(db) == 2
 
 
 def test_resolve_db_path_env_var(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
