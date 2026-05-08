@@ -9,13 +9,19 @@
 // the PIN they just confirmed. Background-then-foreground past 60s flips
 // `unlocked` back to false (handled inside LockProvider).
 
-import { DarkTheme, NavigationContainer } from "@react-navigation/native";
+import {
+  DarkTheme,
+  NavigationContainer,
+  createNavigationContainerRef,
+} from "@react-navigation/native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
-import { useCallback, useEffect, useState } from "react";
+import * as Linking from "expo-linking";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, StyleSheet, View } from "react-native";
 
 import { hasPin } from "../auth/pin";
 import { LockProvider, useLockState } from "../auth/useLockState";
+import { parseDeepLink, type ParsedDeepLink } from "../lib/deepLink";
 import { ChatScreen } from "../screens/ChatScreen";
 import { PinEntryScreen } from "../screens/PinEntryScreen";
 import { PinSetScreen } from "../screens/PinSetScreen";
@@ -32,6 +38,7 @@ import { colors } from "../theme";
 import type { RootStackParamList } from "./types";
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
+const navigationRef = createNavigationContainerRef<RootStackParamList>();
 
 const navTheme = {
   ...DarkTheme,
@@ -57,6 +64,8 @@ function RootRouter() {
   const [partial, setPartial] = useState<PartialClientConfig | null>(null);
   const [pinIsSet, setPinIsSet] = useState<boolean | null>(null);
   const { unlocked, unlock, lock } = useLockState();
+  const pendingLinkRef = useRef<ParsedDeepLink | null>(null);
+  const [pendingTick, setPendingTick] = useState(0);
 
   const reload = useCallback(async () => {
     const [config, pin] = await Promise.all([loadConfig(), hasPin()]);
@@ -67,6 +76,47 @@ function RootRouter() {
   useEffect(() => {
     void reload();
   }, [reload]);
+
+  // Deep links: capture both cold-launch (`getInitialURL`) and warm-resume
+  // (`addEventListener("url")`). Stash in a ref; the consume effect below
+  // navigates once the unlocked stack is mounted.
+  useEffect(() => {
+    let cancelled = false;
+    void Linking.getInitialURL().then((url) => {
+      if (cancelled) return;
+      const parsed = parseDeepLink(url);
+      if (parsed) {
+        pendingLinkRef.current = parsed;
+        setPendingTick((t) => t + 1);
+      }
+    });
+    const sub = Linking.addEventListener("url", ({ url }) => {
+      const parsed = parseDeepLink(url);
+      if (parsed) {
+        pendingLinkRef.current = parsed;
+        setPendingTick((t) => t + 1);
+      }
+    });
+    return () => {
+      cancelled = true;
+      sub.remove();
+    };
+  }, []);
+
+  // Consume the pending deep link once we're unlocked and the navigator is
+  // ready. While locked, the link stays parked — the user has to enter their
+  // PIN before we route into the session.
+  useEffect(() => {
+    if (!unlocked) return;
+    const link = pendingLinkRef.current;
+    if (!link) return;
+    if (!navigationRef.isReady()) return;
+    pendingLinkRef.current = null;
+    navigationRef.navigate("Chat", {
+      sessionId: link.sessionId,
+      permissionId: link.permissionId,
+    });
+  }, [unlocked, pendingTick]);
 
   if (partial === null || pinIsSet === null) {
     return (
@@ -135,7 +185,14 @@ function RootRouter() {
   }
 
   return (
-    <NavigationContainer theme={navTheme}>
+    <NavigationContainer
+      ref={navigationRef}
+      theme={navTheme}
+      onReady={() => {
+        // Re-trigger the consume effect now that the navigator is mounted.
+        if (pendingLinkRef.current) setPendingTick((t) => t + 1);
+      }}
+    >
       <Stack.Navigator screenOptions={{ headerShown: false }}>{stack}</Stack.Navigator>
     </NavigationContainer>
   );

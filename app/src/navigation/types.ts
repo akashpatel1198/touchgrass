@@ -5,6 +5,6 @@ export type RootStackParamList = {
   PinGate: { unlock: () => void } | undefined;
   Projects: undefined;
   Sessions: { projectName: string };
-  Chat: { sessionId: string };
+  Chat: { sessionId: string; permissionId?: string };
   // Phase 4 §4: FileTree
 };

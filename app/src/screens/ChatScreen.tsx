@@ -80,7 +80,7 @@ const NEAR_BOTTOM_PX = 80;
 export function ChatScreen() {
   const route = useRoute<ChatRoute>();
   const navigation = useNavigation();
-  const { sessionId } = route.params;
+  const { sessionId, permissionId } = route.params;
 
   const [config, setConfig] = useState<ClientConfig | null>(null);
   const [session, setSession] = useState<Session | null>(null);
@@ -119,14 +119,29 @@ export function ChatScreen() {
         }
       }
       // Cold-start recovery: if a permission for this session was already
-      // pending before we connected, surface it immediately.
+      // pending before we connected, surface it immediately. If we arrived
+      // here via a deep link (`permissionId` param set), prefer that exact id
+      // and warn if it's no longer pending — likely already resolved.
       try {
         const all = await api.listPendingPermissions(partial);
         if (cancelled) return;
-        const match = all.find((r) => r.session_id === sessionId) ?? null;
-        if (match) {
-          setPending(match);
-          setSheetVisible(true);
+        if (permissionId) {
+          const exact = all.find((r) => r.id === permissionId) ?? null;
+          if (exact) {
+            setPending(exact);
+            setSheetVisible(true);
+          } else {
+            Alert.alert(
+              "Already handled",
+              "That permission request was already resolved.",
+            );
+          }
+        } else {
+          const match = all.find((r) => r.session_id === sessionId) ?? null;
+          if (match) {
+            setPending(match);
+            setSheetVisible(true);
+          }
         }
       } catch {
         // Non-fatal — the WS will deliver any new permission_request anyway.
@@ -135,7 +150,7 @@ export function ChatScreen() {
     return () => {
       cancelled = true;
     };
-  }, [navigation, sessionId]);
+  }, [navigation, sessionId, permissionId]);
 
   // Open WS once config is in hand. The handle is closed on unmount or when
   // config changes (unlikely mid-screen).
