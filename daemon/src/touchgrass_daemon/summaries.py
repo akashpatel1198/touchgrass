@@ -16,18 +16,40 @@ real SDK (per CLAUDE.md, no real SDK calls in tests).
 from __future__ import annotations
 
 import logging
-from typing import Any, Protocol
+from typing import Protocol
 
 from claude_agent_sdk import (
     AssistantMessage,
     ClaudeAgentOptions,
-    PermissionResultDeny,
     TextBlock,
-    ToolPermissionContext,
     query,
 )
 
 log = logging.getLogger(__name__)
+
+# Tools the SDK might offer to a generic agent run. We block them all for
+# summary calls so the model can't go reading siblings off the prompt's
+# scope. We can't use `can_use_tool` here because the SDK rejects it on
+# string-prompt (non-streaming) `query()` calls; `disallowed_tools` works
+# in both modes.
+_BLOCKED_TOOLS: list[str] = [
+    "Read",
+    "Write",
+    "Edit",
+    "MultiEdit",
+    "Bash",
+    "BashOutput",
+    "KillShell",
+    "Glob",
+    "Grep",
+    "WebSearch",
+    "WebFetch",
+    "Task",
+    "TodoWrite",
+    "NotebookEdit",
+    "SlashCommand",
+    "ExitPlanMode",
+]
 
 # Cap how much we send — the model has its own context limit, but we want to
 # keep latency reasonable on the phone. Files larger than this get truncated
@@ -45,13 +67,6 @@ _SYSTEM = (
 
 class SummaryGenerator(Protocol):
     async def __call__(self, *, rel_path: str, contents: str) -> str: ...
-
-
-async def _deny_all(
-    tool_name: str, tool_input: dict[str, Any], context: ToolPermissionContext
-) -> PermissionResultDeny:
-    del tool_name, tool_input, context
-    return PermissionResultDeny(message="summary calls don't get tools")
 
 
 async def default_summary_generator(*, rel_path: str, contents: str) -> str:
@@ -72,7 +87,7 @@ async def default_summary_generator(*, rel_path: str, contents: str) -> str:
     )
     options = ClaudeAgentOptions(
         system_prompt=_SYSTEM,
-        can_use_tool=_deny_all,
+        disallowed_tools=_BLOCKED_TOOLS,
         max_turns=1,
     )
 

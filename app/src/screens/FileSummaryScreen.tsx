@@ -31,6 +31,7 @@ import type { RootStackParamList } from "../navigation/types";
 type Route = RouteProp<RootStackParamList, "FileSummary">;
 
 type SummaryState =
+  | { kind: "idle" }
   | { kind: "loading" }
   | { kind: "ok"; summary: string; cached: boolean }
   | { kind: "error"; message: string };
@@ -47,7 +48,7 @@ export function FileSummaryScreen() {
   const { projectName, path } = route.params;
 
   const [config, setConfig] = useState<ClientConfig | null>(null);
-  const [summary, setSummary] = useState<SummaryState>({ kind: "loading" });
+  const [summary, setSummary] = useState<SummaryState>({ kind: "idle" });
   const [contents, setContents] = useState<ContentsState>({ kind: "idle" });
 
   useEffect(() => {
@@ -56,21 +57,22 @@ export function FileSummaryScreen() {
       const partial = await loadConfig();
       if (cancelled || !isComplete(partial)) return;
       setConfig(partial);
-      try {
-        const res = await api.getFileSummary(partial, projectName, path);
-        if (!cancelled) {
-          setSummary({ kind: "ok", summary: res.summary, cached: res.cached });
-        }
-      } catch (exc) {
-        if (!cancelled) {
-          setSummary({ kind: "error", message: messageFor(exc) });
-        }
-      }
     })();
     return () => {
       cancelled = true;
     };
   }, [projectName, path]);
+
+  const loadSummary = async () => {
+    if (!config || summary.kind === "loading") return;
+    setSummary({ kind: "loading" });
+    try {
+      const res = await api.getFileSummary(config, projectName, path);
+      setSummary({ kind: "ok", summary: res.summary, cached: res.cached });
+    } catch (exc) {
+      setSummary({ kind: "error", message: messageFor(exc) });
+    }
+  };
 
   const loadContents = async () => {
     if (!config || contents.kind === "loading") return;
@@ -96,6 +98,11 @@ export function FileSummaryScreen() {
 
       <ScrollView contentContainerStyle={styles.body}>
         <Text style={styles.eyebrow}>SUMMARY</Text>
+        {summary.kind === "idle" && (
+          <Pressable style={styles.showBtn} onPress={loadSummary}>
+            <Text style={styles.showBtnText}>Generate summary</Text>
+          </Pressable>
+        )}
         {summary.kind === "loading" && (
           <View style={styles.summaryLoading}>
             <ActivityIndicator color={colors.accent} />
@@ -103,7 +110,12 @@ export function FileSummaryScreen() {
           </View>
         )}
         {summary.kind === "error" && (
-          <Text style={styles.error}>{summary.message}</Text>
+          <>
+            <Text style={styles.error}>{summary.message}</Text>
+            <Pressable style={styles.showBtn} onPress={loadSummary}>
+              <Text style={styles.showBtnText}>Try again</Text>
+            </Pressable>
+          </>
         )}
         {summary.kind === "ok" && (
           <>
@@ -111,6 +123,9 @@ export function FileSummaryScreen() {
             <Text style={styles.cachedHint}>
               {summary.cached ? "from cache" : "fresh"}
             </Text>
+            <Pressable style={styles.regenBtn} onPress={loadSummary}>
+              <Text style={styles.regenBtnText}>Regenerate</Text>
+            </Pressable>
           </>
         )}
 
@@ -216,6 +231,11 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   showBtnText: { color: colors.text, fontSize: fontSizes.body, fontWeight: "600" },
+  regenBtn: {
+    alignSelf: "flex-start",
+    paddingVertical: spacing.sm,
+  },
+  regenBtnText: { color: colors.accent, fontSize: fontSizes.sm, fontWeight: "600" },
   codeWrap: {
     backgroundColor: colors.surface,
     borderColor: colors.border,

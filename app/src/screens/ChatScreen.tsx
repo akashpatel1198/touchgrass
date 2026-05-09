@@ -34,9 +34,12 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+import Markdown from "react-native-markdown-display";
+
 import { ApiError, api } from "../api/client";
 import type {
   DecisionKind,
+  Message,
   PermissionRequest,
   Session,
   SessionStatus,
@@ -46,6 +49,7 @@ import {
   type ReplayPayload,
   type WsConnectionStatus,
   type WsEvent,
+  type WsHandle,
 } from "../api/ws";
 import { PermissionSheet } from "../components/PermissionSheet";
 import { StatusBadge } from "../components/StatusBadge";
@@ -95,10 +99,19 @@ export function ChatScreen() {
   const [pending, setPending] = useState<PermissionRequest | null>(null);
   const [sheetVisible, setSheetVisible] = useState(false);
   const [decisionBusy, setDecisionBusy] = useState(false);
+  const [turnInFlight, setTurnInFlight] = useState(false);
 
   const listRef = useRef<FlatList<Item>>(null);
   const counterRef = useRef(0);
   const nextId = (prefix: string) => `${prefix}-${++counterRef.current}`;
+  // Pending wipe runs synchronously when the next event arrives after a fresh
+  // WS open. Doing it via useEffect on wsStatus loses the race against the
+  // replay events that come right after onopen — the replays would land in
+  // setItems first, then the effect would wipe them.
+  const pendingWipeRef = useRef(false);
+  const wsHandleRef = useRef<WsHandle | null>(null);
+  // Guard so we don't double-init the connection / history fetch on re-renders.
+  const initRef = useRef(false);
 
   // Boot: load config, fetch session metadata, then open the WS. Without
   // config we can't do anything; bounce back.
@@ -154,19 +167,16 @@ export function ChatScreen() {
     };
   }, [navigation, sessionId, permissionId]);
 
-  // Open WS once config is in hand. The handle is closed on unmount or when
-  // config changes (unlikely mid-screen).
-  useEffect(() => {
-    if (!config) return;
-    const handle = connectSessionStream(config, sessionId, {
-      onStatusChange: setWsStatus,
-      onEvent: (event) => handleEvent(event),
-    });
-    return () => handle.close();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [config, sessionId]);
-
   const handleEvent = useCallback((event: WsEvent) => {
+    // Wipe-on-fresh-open lives here, not in a useEffect on wsStatus, so it
+    // runs in the same tick as the events that follow `onopen`. Otherwise
+    // replays land first and a deferred wipe nukes them.
+    if (pendingWipeRef.current) {
+      pendingWipeRef.current = false;
+      setItems([]);
+      setExpanded({});
+      counterRef.current = 0;
+    }
     if (event.type === "replay") {
       const incoming = replayToItem(event.payload);
       if (!incoming) return;
@@ -174,6 +184,7 @@ export function ChatScreen() {
       return;
     }
     if (event.type === "assistant_message") {
+      setTurnInFlight(false);
       setItems((prev) => [
         ...prev,
         { kind: "assistant", id: nextId("a"), text: event.payload.text },
@@ -213,9 +224,11 @@ export function ChatScreen() {
       return;
     }
     if (event.type === "session_status") {
-      setSession((s) =>
-        s ? { ...s, status: event.payload.status } : s,
-      );
+      const newStatus = event.payload.status;
+      setSession((s) => (s ? { ...s, status: newStatus } : s));
+      if (newStatus === "completed" || newStatus === "failed") {
+        setTurnInFlight(false);
+      }
       return;
     }
     if (event.type === "permission_request") {
@@ -237,6 +250,7 @@ export function ChatScreen() {
       return;
     }
     if (event.type === "error") {
+      setTurnInFlight(false);
       setItems((prev) => [
         ...prev,
         { kind: "error", id: nextId("e"), message: event.payload.message },
@@ -244,17 +258,49 @@ export function ChatScreen() {
     }
   }, []);
 
-  // On every fresh WS `open`, wipe the transcript so the replay batch repaints
-  // from scratch. Driven off wsStatus transitions: connecting → open.
-  const prevWsStatus = useRef<WsConnectionStatus>("connecting");
+  const onWsStatusChange = useCallback((s: WsConnectionStatus) => {
+    if (s === "open") pendingWipeRef.current = true;
+    setWsStatus(s);
+  }, []);
+
+  // Once we have config + session metadata, decide how to populate the
+  // transcript. Active/waiting sessions get a live WS subscription; terminal
+  // sessions have no hub on the daemon, so we fetch history over REST. Guard
+  // against re-running when session status flips mid-screen.
   useEffect(() => {
-    if (prevWsStatus.current !== "open" && wsStatus === "open") {
-      setItems([]);
-      setExpanded({});
-      counterRef.current = 0;
+    if (!config || !session || initRef.current) return;
+    initRef.current = true;
+
+    const isTerminal =
+      session.status === "completed" || session.status === "failed";
+
+    if (isTerminal) {
+      setWsStatus("closed");
+      (async () => {
+        try {
+          const msgs = await api.getMessages(config, sessionId, { limit: 200 });
+          const mapped = msgs
+            .map(messageToItem)
+            .filter((x): x is Item => x !== null);
+          setItems(mapped);
+        } catch (exc) {
+          Alert.alert("Couldn't load history", messageFor(exc));
+        }
+      })();
+      return;
     }
-    prevWsStatus.current = wsStatus;
-  }, [wsStatus]);
+
+    wsHandleRef.current = connectSessionStream(config, sessionId, {
+      onStatusChange: onWsStatusChange,
+      onEvent: handleEvent,
+    });
+  }, [config, session, sessionId, handleEvent, onWsStatusChange]);
+
+  useEffect(() => {
+    return () => {
+      wsHandleRef.current?.close();
+    };
+  }, []);
 
   // Auto-scroll: if user is pinned near the bottom, keep it pinned on new
   // content. If they've scrolled up, leave them alone and surface the "jump
@@ -286,10 +332,12 @@ export function ChatScreen() {
       { kind: "user", id: nextId("u"), text: trimmed },
     ]);
     setPinnedToBottom(true);
+    setTurnInFlight(true);
     try {
       await api.submitPrompt(config, sessionId, trimmed);
     } catch (exc) {
       Alert.alert("Couldn't send prompt", messageFor(exc));
+      setTurnInFlight(false);
     } finally {
       setSending(false);
     }
@@ -384,8 +432,12 @@ export function ChatScreen() {
 
       <KeyboardAvoidingView
         style={styles.flex}
-        behavior={Platform.OS === "ios" ? "padding" : undefined}
-        keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 0}
+        // `behavior="padding"` works on both platforms in Expo Go. On Android,
+        // `undefined` would rely on the activity's softInputMode (we set
+        // `resize` in app.json), but that's only honored once a dev build
+        // ships — Expo Go ignores it. Padding is the belt + suspenders.
+        behavior="padding"
+        keyboardVerticalOffset={0}
       >
         <View style={styles.transcriptWrap}>
           <FlatList
@@ -402,7 +454,9 @@ export function ChatScreen() {
             ListEmptyComponent={
               <View style={styles.empty}>
                 <Text style={styles.emptyText}>
-                  {wsStatus === "open"
+                  {terminal
+                    ? "No messages in this session."
+                    : wsStatus === "open"
                     ? "No messages yet. Send a prompt below."
                     : "Connecting…"}
                 </Text>
@@ -421,6 +475,13 @@ export function ChatScreen() {
             </Pressable>
           )}
         </View>
+
+        {turnInFlight && (
+          <View style={styles.thinking}>
+            <ActivityIndicator color={colors.accent} size="small" />
+            <Text style={styles.thinkingText}>Claude is thinking…</Text>
+          </View>
+        )}
 
         <View style={styles.inputBar}>
           <TextInput
@@ -463,19 +524,45 @@ export function ChatScreen() {
 }
 
 function replayToItem(p: ReplayPayload): Item | null {
-  const id = `replay-${p.id}`;
-  if (p.role === "user") return { kind: "user", id, text: p.content };
-  if (p.role === "assistant") return { kind: "assistant", id, text: p.content };
+  return roleToItem({
+    id: `replay-${p.id}`,
+    role: p.role,
+    content: p.content,
+    tool_name: p.tool_name,
+    tool_args: p.tool_args,
+  });
+}
+
+function messageToItem(m: Message): Item | null {
+  return roleToItem({
+    id: `rest-${m.id}`,
+    role: m.role,
+    content: m.content,
+    tool_name: m.tool_name,
+    tool_args: m.tool_args,
+  });
+}
+
+function roleToItem(p: {
+  id: string;
+  role: Message["role"];
+  content: string;
+  tool_name: string | null;
+  tool_args: string | null;
+}): Item | null {
+  if (p.role === "user") return { kind: "user", id: p.id, text: p.content };
+  if (p.role === "assistant")
+    return { kind: "assistant", id: p.id, text: p.content };
   if (p.role === "tool_call") {
     return {
       kind: "tool_call",
-      id,
+      id: p.id,
       toolName: p.tool_name ?? "tool",
       toolArgs: p.tool_args ?? p.content,
     };
   }
   if (p.role === "tool_result") {
-    return { kind: "tool_result", id, content: p.content, isError: false };
+    return { kind: "tool_result", id: p.id, content: p.content, isError: false };
   }
   return null;
 }
@@ -499,7 +586,7 @@ function Row({
   if (item.kind === "assistant") {
     return (
       <View style={[styles.bubble, styles.bubbleAssistant]}>
-        <Text style={styles.bubbleText}>{item.text}</Text>
+        <Markdown style={markdownStyles}>{item.text}</Markdown>
       </View>
     );
   }
@@ -695,4 +782,70 @@ const styles = StyleSheet.create({
   },
   sendBtnDisabled: { opacity: 0.4 },
   sendText: { color: colors.bg, fontSize: fontSizes.body, fontWeight: "600" },
+
+  thinking: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+    backgroundColor: colors.surface,
+    borderTopColor: colors.border,
+    borderTopWidth: StyleSheet.hairlineWidth,
+  },
+  thinkingText: { color: colors.textMuted, fontSize: fontSizes.sm },
+});
+
+// Markdown styles for assistant messages. Keep it close to the surrounding
+// bubble styling so it doesn't clash; tighten paragraph margins so single-line
+// replies don't have a sea of vertical padding.
+const markdownStyles = StyleSheet.create({
+  body: { color: colors.text, fontSize: fontSizes.body, lineHeight: 22 },
+  paragraph: { marginTop: 0, marginBottom: spacing.sm, color: colors.text },
+  heading1: { color: colors.text, fontSize: fontSizes.title, fontWeight: "700", marginBottom: spacing.sm, marginTop: spacing.sm },
+  heading2: { color: colors.text, fontSize: fontSizes.lg, fontWeight: "700", marginBottom: spacing.sm, marginTop: spacing.sm },
+  heading3: { color: colors.text, fontSize: fontSizes.body, fontWeight: "700", marginBottom: spacing.sm, marginTop: spacing.sm },
+  strong: { fontWeight: "700", color: colors.text },
+  em: { fontStyle: "italic", color: colors.text },
+  code_inline: {
+    color: colors.accent,
+    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+    fontSize: fontSizes.sm,
+    backgroundColor: colors.bg,
+    paddingHorizontal: 4,
+    borderRadius: 3,
+  },
+  code_block: {
+    color: colors.text,
+    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+    fontSize: fontSizes.xs,
+    backgroundColor: colors.bg,
+    padding: spacing.sm,
+    borderRadius: radii.sm,
+    borderColor: colors.border,
+    borderWidth: 1,
+  },
+  fence: {
+    color: colors.text,
+    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+    fontSize: fontSizes.xs,
+    backgroundColor: colors.bg,
+    padding: spacing.sm,
+    borderRadius: radii.sm,
+    borderColor: colors.border,
+    borderWidth: 1,
+  },
+  bullet_list: { marginBottom: spacing.sm },
+  ordered_list: { marginBottom: spacing.sm },
+  list_item: { color: colors.text, marginBottom: 2 },
+  link: { color: colors.accent, textDecorationLine: "underline" },
+  hr: { backgroundColor: colors.border, height: StyleSheet.hairlineWidth, marginVertical: spacing.sm },
+  blockquote: {
+    backgroundColor: colors.surfaceElevated,
+    borderLeftColor: colors.accent,
+    borderLeftWidth: 3,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+    marginVertical: spacing.xs,
+  },
 });
